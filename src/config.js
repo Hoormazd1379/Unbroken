@@ -163,8 +163,8 @@ export const CONFIG = {
 
     // ── Stars / Scoring (time-based) ──
     SCORING: {
-        THREE_STAR_SECS_PER_NODE: 1.0,   // ≤1s per node = 3★
-        TWO_STAR_SECS_PER_NODE: 1.5,     // ≤1.5s per node = 2★
+        THREE_STAR_SECS_PER_NODE: 1.5,   // ≤1.5s per node = 3★
+        TWO_STAR_SECS_PER_NODE: 2.5,     // ≤2.5s per node = 2★
         // anything above = 1★
     },
 
