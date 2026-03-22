@@ -148,7 +148,7 @@ function handleVertexClick(vertexIdx) {
         pulseVertex(vertexIdx);
         Audio.playEdgeDraw(puzzle.moveCount, currentLevel.vertexCount);
         Audio.setProgress(puzzle.moveCount / currentLevel.vertexCount);
-        Audio.nudgeValence(0.03);  // each successful move lifts valence
+        Audio.nudgeValence(0.06);  // each successful move brightens the mood
 
         if (result.complete) {
             handleWin();
@@ -156,8 +156,8 @@ function handleVertexClick(vertexIdx) {
             // Check if stuck
             if (!puzzle.isSolvable()) {
                 UI.showStuckNotice();
-                Audio.nudgeEnergy(-0.15);
-                Audio.nudgeValence(-0.25);
+                Audio.nudgeEnergy(-0.2);
+                Audio.nudgeValence(-0.35);
             }
         }
     } else {
@@ -166,7 +166,7 @@ function handleVertexClick(vertexIdx) {
             result.invalidReason === 'node_visited' || result.invalidReason === 'wrong_color') {
             screenShake(3, 150);
             Audio.playInvalidMove();
-            Audio.nudgeValence(-0.08);
+            Audio.nudgeValence(-0.12);
         }
     }
 }
@@ -230,10 +230,83 @@ function handleKeyboard(e) {
         case 'h':
             handleHint();
             break;
+        case 'd':
+        case 'D':
+            toggleDebugPanel();
+            break;
         case 'Escape':
             UI.showPauseOverlay();
             break;
     }
+}
+
+// ── Mood Aura ──
+const auraEl = document.getElementById('mood-aura');
+
+function updateAura() {
+    const e = Audio.getEnergy();
+    const v = Audio.getValence();
+
+    // Color: hue shifts 170 (teal) → 260 (purple) → 320 (magenta)
+    // Valence +1 → teal, 0 → purple, -1 → magenta
+    const hue = 260 - v * 90;
+    const sat = 60 + e * 30;
+    const alpha = 0.05 + e * 0.18;
+    auraEl.style.setProperty('--aura-color', `hsla(${hue}, ${sat}%, 55%, ${alpha.toFixed(3)})`);
+
+    // Pulse speed: 5s (calm) → 1.5s (intense)
+    const speed = 5 - e * 3.5;
+    auraEl.style.setProperty('--aura-speed', `${speed.toFixed(1)}s`);
+
+    // Pulse intensity: 1.1 (calm) → 1.8 (intense)
+    const brightness = 1.1 + e * 0.7;
+    auraEl.style.setProperty('--aura-brightness', brightness.toFixed(2));
+}
+
+// ── Debug Panel ──
+const debugPanel = document.getElementById('audio-debug');
+let debugVisible = false;
+
+function toggleDebugPanel() {
+    debugVisible = !debugVisible;
+    debugPanel.classList.toggle('hidden', !debugVisible);
+}
+
+function updateDebugPanel() {
+    if (!debugVisible) return;
+
+    const d = Audio.getDebugInfo();
+
+    // Energy bar
+    document.getElementById('dbg-energy-bar').style.width = `${(d.energy * 100).toFixed(0)}%`;
+    document.getElementById('dbg-energy-val').textContent = d.energy;
+
+    // Valence bar (map -1..1 to 0..100%)
+    const vPct = ((parseFloat(d.valence) + 1) / 2 * 100).toFixed(0);
+    document.getElementById('dbg-valence-bar').style.width = `${vPct}%`;
+    document.getElementById('dbg-valence-val').textContent = d.valence;
+
+    // Mood badge
+    const moodEl = document.getElementById('dbg-mood');
+    moodEl.textContent = d.mood;
+    moodEl.className = `debug-mood mood-${d.mood}`;
+
+    // BPM
+    document.getElementById('dbg-bpm').textContent = `${d.bpm} BPM`;
+
+    // Chord + progression
+    document.getElementById('dbg-chord').textContent = d.chord;
+    document.getElementById('dbg-prog').textContent = `${d.progType}: ${d.progression}`;
+
+    // Layers
+    document.getElementById('dbg-layers').textContent = `Layers: ${d.layers || '—'}`;
+
+    // Beat dots
+    const dots = document.querySelectorAll('#dbg-beat .beat-dot');
+    const beatInBar = d.beat % 4;
+    dots.forEach((dot, i) => {
+        dot.classList.toggle('active', i === beatInBar);
+    });
 }
 
 // ── Game Loop ──
@@ -248,6 +321,8 @@ function startGameLoop() {
 
 function update(timestamp) {
     updateEffects();
+    updateAura();
+    updateDebugPanel();
 
     if (puzzle && isPlaying) {
         UI.updateHUD(puzzle);

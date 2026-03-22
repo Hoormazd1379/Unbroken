@@ -47,6 +47,8 @@ An infinite procedural puzzle game where you trace a Hamiltonian path through ev
 | 🎨 | **Color Mechanics** | Up to 10 node colors — you can only traverse edges between color-compatible nodes |
 | 🌉 | **Bridge Nodes** | Split-colored nodes force you to enter on one color and exit on another |
 | 🪤 | **Engineered Traps** | Dead-end forks, cycle injections, articulation points, decoy paths, color bottlenecks & parity traps |
+| 🎵 | **Adaptive Audio** | Beat-synchronized generative music that reacts to your moves — energy/valence system drives chord progressions, 7 vertical layers, and dynamic BPM |
+| 🌈 | **Mood Aura** | A living screen vignette that breathes and shifts color with the music's energy and emotional valence |
 | ♿ | **High-Contrast Mode** | Colorblind-friendly with unique geometric shapes per color (◆ ★ ▲ ■ ⬡ ⬠ ✚ ♥ ↑) |
 | ⏱️ | **Time-Based Stars** | Earn up to 3 stars: ≤1.5s/node = ★★★, ≤2.5s/node = ★★ |
 | 💡 | **Smart Hints** | 3 hints per level with DFS backtracking solver (unlimited in Free Play) |
@@ -74,6 +76,7 @@ An infinite procedural puzzle game where you trace a Hamiltonian path through ev
 | `H` | Show hint |
 | `U` or `Ctrl+Z` | Undo last move |
 | `R` | Reset level |
+| `D` | Toggle audio debug panel |
 | `Esc` | Pause menu |
 
 ---
@@ -90,7 +93,8 @@ An infinite procedural puzzle game where you trace a Hamiltonian path through ev
 
 - **Zero dependencies** — No frameworks, no build tools, no npm
 - **HTML5 Canvas** — All rendering via Canvas 2D API
-- **ES Modules** — Clean modular architecture (12 files)
+- **Web Audio API** — Entirely synthesized adaptive music engine
+- **ES Modules** — Clean modular architecture (13 files)
 - **LocalStorage** — Progress saved in the browser
 - **Seeded PRNG** — Deterministic level generation (Mulberry32)
 
@@ -107,6 +111,7 @@ Unbroken/
 └── src/
     ├── main.js             App init & game loop
     ├── config.js           Configuration & constants
+    ├── audio.js            Adaptive audio engine (energy/valence system)
     ├── levelgen.js         Procedural level generation & trap engineering
     ├── puzzle.js           Puzzle state & move validation
     ├── renderer.js         Canvas rendering (shapes, curves, effects)

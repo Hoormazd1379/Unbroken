@@ -12,6 +12,9 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- Mood Aura Overlay -->
+    <div id="mood-aura"></div>
+
     <!-- UI Overlay Container (menus, screens) -->
     <div id="ui-container"></div>
 
@@ -20,6 +23,34 @@
 
     <!-- HUD Container (in-game controls) -->
     <div id="hud-container"></div>
+
+    <!-- Audio Debug Panel (toggle with D key) -->
+    <div id="audio-debug" class="hidden">
+        <div class="debug-header">♫ Audio Debug</div>
+        <div class="debug-bars">
+            <div class="debug-row">
+                <span class="debug-label">Energy</span>
+                <div class="debug-bar-bg"><div id="dbg-energy-bar" class="debug-bar-fill energy"></div></div>
+                <span id="dbg-energy-val" class="debug-val">0.00</span>
+            </div>
+            <div class="debug-row">
+                <span class="debug-label">Valence</span>
+                <div class="debug-bar-bg"><div id="dbg-valence-bar" class="debug-bar-fill valence"></div></div>
+                <span id="dbg-valence-val" class="debug-val">0.00</span>
+            </div>
+        </div>
+        <div class="debug-info">
+            <span id="dbg-mood" class="debug-mood">ambient</span>
+            <span id="dbg-bpm" class="debug-bpm">68 BPM</span>
+        </div>
+        <div id="dbg-chord" class="debug-chord">—</div>
+        <div id="dbg-prog" class="debug-prog">—</div>
+        <div id="dbg-layers" class="debug-layers">—</div>
+        <div id="dbg-beat" class="debug-beat">
+            <span class="beat-dot"></span><span class="beat-dot"></span>
+            <span class="beat-dot"></span><span class="beat-dot"></span>
+        </div>
+    </div>
 
     <!-- Main Script -->
     <script type="module" src="src/main.js"></script>

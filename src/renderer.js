@@ -169,12 +169,10 @@ export function renderGame(ctx, canvas, puzzle, hoverVertex, timestamp, highCont
  * Dark gradient background with subtle grid.
  */
 function drawBackground(ctx, w, h, timestamp) {
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, C.BG_GRADIENT_START);
-    grad.addColorStop(1, C.BG_GRADIENT_END);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+    // Clear to fully transparent so the mood aura shines through
+    ctx.clearRect(0, 0, w, h);
 
+    // Breathing dot grid
     const spacing = 40;
     const breathe = Math.sin(timestamp * 0.001) * 0.3 + 0.7;
     ctx.fillStyle = `rgba(255,255,255,${0.015 * breathe})`;

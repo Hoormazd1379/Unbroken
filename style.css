@@ -818,3 +818,178 @@ body {
         grid-template-columns: repeat(4, 1fr);
     }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Mood Aura — Living border that breathes with the music
+   ═══════════════════════════════════════════════════════════ */
+
+#mood-aura {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 1;
+    /* Vignette glow: 4 radial gradients from each edge */
+    background:
+        radial-gradient(ellipse at 50% 0%,   var(--aura-color, rgba(124,106,239,0.25)) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 100%, var(--aura-color, rgba(124,106,239,0.25)) 0%, transparent 50%),
+        radial-gradient(ellipse at 0% 50%,   var(--aura-color, rgba(124,106,239,0.25)) 0%, transparent 50%),
+        radial-gradient(ellipse at 100% 50%, var(--aura-color, rgba(124,106,239,0.25)) 0%, transparent 50%);
+    animation: auraPulse var(--aura-speed, 4s) ease-in-out infinite;
+}
+
+@keyframes auraPulse {
+    0%, 100% { filter: brightness(1); }
+    50%      { filter: brightness(var(--aura-brightness, 1.5)); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Audio Debug Panel — Toggle with D key
+   ═══════════════════════════════════════════════════════════ */
+
+#audio-debug {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    z-index: 100;
+    width: 280px;
+    background: rgba(8, 8, 18, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(124, 106, 239, 0.25);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+#audio-debug.hidden {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+    pointer-events: none;
+}
+
+.debug-header {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--accent-light);
+    margin-bottom: 10px;
+    letter-spacing: 0.5px;
+}
+
+.debug-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.debug-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.debug-label {
+    width: 52px;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.debug-bar-bg {
+    flex: 1;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.debug-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.15s ease, background 0.3s ease;
+}
+
+.debug-bar-fill.energy {
+    background: linear-gradient(90deg, #34d399, #fbbf24, #ef4444);
+}
+
+.debug-bar-fill.valence {
+    background: linear-gradient(90deg, #818cf8, #7c6aef, #c084fc);
+}
+
+.debug-val {
+    width: 36px;
+    text-align: right;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
+.debug-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.debug-mood {
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+
+.debug-mood.mood-ambient  { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+.debug-mood.mood-flowing  { background: rgba(124, 106, 239, 0.2); color: #a78bfa; }
+.debug-mood.mood-tense    { background: rgba(239, 68, 68, 0.2);   color: #f87171; }
+.debug-mood.mood-triumph  { background: rgba(251, 191, 36, 0.2);  color: #fbbf24; }
+
+.debug-bpm {
+    color: var(--text-dim);
+    font-size: 11px;
+}
+
+.debug-chord {
+    font-weight: 700;
+    font-size: 16px;
+    color: var(--accent-light);
+    margin-bottom: 4px;
+}
+
+.debug-prog {
+    font-size: 9px;
+    color: var(--text-dim);
+    word-break: break-all;
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.debug-layers {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+}
+
+.debug-beat {
+    display: flex;
+    gap: 4px;
+}
+
+.beat-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    transition: background 0.1s ease, transform 0.1s ease;
+}
+
+.beat-dot.active {
+    background: var(--accent);
+    transform: scale(1.3);
+    box-shadow: 0 0 6px var(--accent-glow);
+}

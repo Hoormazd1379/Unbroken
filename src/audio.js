@@ -174,18 +174,20 @@ export function nudgeValence(delta) {
     valence = Math.max(-1, Math.min(1, valence + delta));
 }
 
-/** Set progress ratio for current level (0–1). Raises energy. */
+/** Set progress ratio for current level (0–1). Only raises energy, never lowers. */
 export function setProgress(ratio) {
     const p = Math.max(0, Math.min(1, ratio));
-    // Energy tracks progress but doesn't purely equal it
-    const target = 0.2 + p * 0.5; // maps 0–1 to 0.2–0.7
-    energy = energy * 0.7 + target * 0.3; // smooth blend
+    const target = 0.25 + p * 0.55; // maps 0–1 to 0.25–0.8
+    // Only raise, never drop energy from progress
+    if (target > energy) {
+        energy = energy * 0.6 + target * 0.4; // faster blend upward
+    }
 }
 
 /** Burst of triumph energy (decays naturally). */
 export function triumphBurst() {
-    energy = Math.min(1, energy + 0.35);
-    valence = Math.min(1, valence + 0.4);
+    energy = Math.min(1, energy + 0.45);
+    valence = Math.min(1, valence + 0.5);
 }
 
 /** Get current state for external checks */
@@ -219,12 +221,12 @@ function onBeat() {
     if (!ctx || !running) return;
 
     // Smoothly approach target BPM
-    bpm += (targetBpm - bpm) * 0.08;
+    bpm += (targetBpm - bpm) * 0.06;
 
-    // Decay energy & valence slowly toward baseline
-    energy *= 0.997;
-    valence *= 0.998;
-    if (energy < 0.15) energy = 0.15; // never fully silent
+    // Very slow decay — energy lingers, mood feels persistent
+    energy *= 0.9992;
+    valence *= 0.9995;
+    if (energy < 0.12) energy = 0.12; // never fully silent
 
     const beatInBar = beat % 4;
     const barInPhrase = Math.floor(beat / 4) % 4;
@@ -276,8 +278,8 @@ function updateProgression() {
 }
 
 function updateTargetBpm() {
-    // BPM scales with energy: 60–96
-    targetBpm = 60 + energy * 36;
+    // BPM scales with energy: 52–112 (dramatic range)
+    targetBpm = 52 + energy * 60;
 }
 
 // ── Layer Volume Control ──
@@ -285,32 +287,32 @@ function updateTargetBpm() {
 function updateLayers() {
     if (!ctx) return;
     const now = ctx.currentTime;
-    const f = 0.4; // smoothing time constant
+    const f = 0.3; // smoothing time constant (faster response)
 
-    // Filter frequency: 600 (calm) → 4500 (intense)
-    const filterF = 600 + energy * 3900 + Math.max(0, valence) * 800;
+    // Filter frequency: 400 (muffled calm) → 6000 (bright intense)
+    const filterF = 400 + energy * 5600 + Math.max(0, valence) * 1200;
     masterFilter.frequency.setTargetAtTime(filterF, now, f);
 
-    // Pad: always on, volume 0.02–0.07
-    const padVol = 0.02 + energy * 0.05;
+    // Pad: always on, volume scales dramatically 0.015–0.09
+    const padVol = 0.015 + energy * 0.075;
     padVoices.forEach(v => {
         if (v.gain) v.gain.gain.setTargetAtTime(padVol, now, f);
     });
 
-    // Bass: on at energy > 0.1
+    // Bass: on at energy > 0.1, scales to 0.08
     if (bassVoice) {
-        const bv = energy > 0.1 ? 0.02 + energy * 0.04 : 0;
+        const bv = energy > 0.1 ? 0.015 + energy * 0.065 : 0;
         bassVoice.gain.gain.setTargetAtTime(bv, now, f);
     }
 
-    // Sub-bass: on at energy > 0.3
+    // Sub-bass: on at energy > 0.25, rumbles louder
     if (subVoice) {
-        const sv = energy > 0.3 ? (energy - 0.3) * 0.04 : 0;
+        const sv = energy > 0.25 ? (energy - 0.25) * 0.06 : 0;
         subVoice.gain.gain.setTargetAtTime(sv, now, f);
     }
 
-    // Strings: on at energy > 0.35
-    const strVol = energy > 0.35 ? (energy - 0.35) * 0.05 : 0;
+    // Strings: on at energy > 0.3, much more present
+    const strVol = energy > 0.3 ? (energy - 0.3) * 0.08 : 0;
     stringVoices.forEach(v => {
         if (v.gain) v.gain.gain.setTargetAtTime(strVol, now, f);
     });
@@ -493,8 +495,8 @@ function playArpBeat(beatInBar) {
     arpIdx++;
 
     const freq = notes[idx];
-    const vol = 0.01 + energy * 0.04; // very quiet when low energy
-    playNote(freq, 0.15, 'triangle', vol, musicGain);
+    const vol = 0.005 + energy * 0.06; // whisper at low energy, prominent at high
+    playNote(freq, 0.18, 'triangle', vol, musicGain);
 }
 
 // ── Layer: Pulse (rhythmic kick on beats 0,2) ──
@@ -515,9 +517,9 @@ function playPulseBeat() {
     filter.frequency.value = 300 + energy * 400;
     filter.Q.value = 4;
 
-    const vol = (energy - 0.5) * 0.04;
+    const vol = (energy - 0.45) * 0.06;
     gain.gain.setValueAtTime(vol, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
 
     osc.connect(filter);
     filter.connect(gain);
@@ -550,9 +552,9 @@ function playBellNote() {
     mod.connect(mGain);
     mGain.connect(carrier.frequency);
 
-    const vol = (energy - 0.35) * 0.04;
+    const vol = (energy - 0.3) * 0.06;
     cGain.gain.setValueAtTime(vol, now);
-    cGain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+    cGain.gain.exponentialRampToValueAtTime(0.001, now + 1.4);
 
     carrier.connect(cGain);
     cGain.connect(musicGain);
@@ -577,9 +579,9 @@ function playShimmer() {
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.value = freq;
-    const vol = (energy - 0.5) * 0.015;
+    const vol = (energy - 0.4) * 0.025;
     gain.gain.setValueAtTime(vol, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.5);
 
     osc.connect(gain);
     gain.connect(musicGain);
@@ -752,3 +754,49 @@ function stopEngine() {
 
 // Backward compat — these are now no-ops, mood is driven by energy/valence
 export function setMood() {}
+
+// ── Debug Info ──
+
+// Reverse lookup: chord object → name
+const CHORD_NAMES = new Map();
+Object.entries(C).forEach(([name, ch]) => CHORD_NAMES.set(ch, name));
+
+function getProgType() {
+    if (!currentProg) return '—';
+    if (TRIUMPH_PROGS.includes(currentProg)) return 'TRIUMPH';
+    if (MINOR_PROGS.includes(currentProg)) return 'MINOR';
+    return 'MAJOR';
+}
+
+/** Returns current audio state for debug overlay */
+export function getDebugInfo() {
+    const ch = currentProg ? currentProg[progIdx] : null;
+    const chordName = ch ? (CHORD_NAMES.get(ch) || '?') : '—';
+    const progChords = currentProg
+        ? currentProg.map((c, i) => (i === progIdx ? `[${CHORD_NAMES.get(c) || '?'}]` : CHORD_NAMES.get(c) || '?')).join(' → ')
+        : '—';
+
+    // Active layers
+    const layers = [];
+    if (padVoices.length > 0) layers.push('pad');
+    if (bassVoice) layers.push('bass');
+    if (subVoice) layers.push('sub');
+    if (stringVoices.length > 0) layers.push('str');
+    if (energy >= 0.2) layers.push('arp');
+    if (energy >= 0.5) layers.push('pulse');
+    if (energy >= 0.35) layers.push('bell');
+    if (energy >= 0.5) layers.push('shim');
+
+    return {
+        energy: energy.toFixed(3),
+        valence: valence.toFixed(3),
+        bpm: bpm.toFixed(1),
+        beat: beat % 16,
+        bar: Math.floor(beat / 4) % 4,
+        chord: chordName,
+        progType: getProgType(),
+        progression: progChords,
+        layers: layers.join(' '),
+        mood: getMood(),
+    };
+}
