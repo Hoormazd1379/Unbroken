@@ -347,6 +347,14 @@ export function showSettings() {
             </div>
             <div class="settings-list">
                 <label class="setting-row">
+                    <span>Background Music</span>
+                    <input type="checkbox" id="setting-music" ${settings.musicEnabled ? 'checked' : ''}>
+                </label>
+                <label class="setting-row">
+                    <span>Sound Effects</span>
+                    <input type="checkbox" id="setting-sfx" ${settings.sfxEnabled ? 'checked' : ''}>
+                </label>
+                <label class="setting-row">
                     <span>High Contrast Mode</span>
                     <input type="checkbox" id="setting-contrast" ${settings.highContrast ? 'checked' : ''}>
                 </label>
@@ -376,6 +384,12 @@ export function showSettings() {
     `;
 
     document.getElementById('btn-back-settings').addEventListener('click', () => showTitle());
+    document.getElementById('setting-music').addEventListener('change', (e) => {
+        if (gameCallbacks.setMusicEnabled) gameCallbacks.setMusicEnabled(e.target.checked);
+    });
+    document.getElementById('setting-sfx').addEventListener('change', (e) => {
+        if (gameCallbacks.setSfxEnabled) gameCallbacks.setSfxEnabled(e.target.checked);
+    });
     document.getElementById('setting-contrast').addEventListener('change', (e) => {
         Save.updateSetting('highContrast', e.target.checked);
     });

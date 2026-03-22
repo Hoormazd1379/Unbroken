@@ -12,6 +12,8 @@ const DEFAULT_SAVE = {
         highContrast: false,
         showTimer: true,
         freePlay: false,
+        musicEnabled: true,
+        sfxEnabled: true,
     },
     currentLevel: 1,
 };
@@ -26,7 +28,7 @@ export function loadSave() {
             const parsed = JSON.parse(raw);
             // Version migration
             if (parsed.version === CONFIG.SAVE_VERSION) {
-                saveData = { ...DEFAULT_SAVE, ...parsed };
+                saveData = { ...DEFAULT_SAVE, ...parsed, settings: { ...DEFAULT_SAVE.settings, ...parsed.settings } };
             } else {
                 // Future: migration logic
                 saveData = { ...DEFAULT_SAVE };

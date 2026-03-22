@@ -10,6 +10,7 @@ import { initInput, updateInputVertices } from './input.js';
 import { SCREENS, getScreen } from './state.js';
 import * as Save from './save.js';
 import * as UI from './ui.js';
+import * as Audio from './audio.js';
 import {
     updateEffects, spawnParticles, spawnWinParticles,
     pulseVertex, screenShake, clearEffects,
@@ -43,6 +44,15 @@ function init() {
         onVertexHover: (idx) => { hoverVertex = idx; },
     });
 
+    // Unlock audio on first user interaction
+    const unlockAudio = () => {
+        Audio.unlock();
+        document.removeEventListener('click', unlockAudio);
+        document.removeEventListener('touchstart', unlockAudio);
+    };
+    document.addEventListener('click', unlockAudio);
+    document.addEventListener('touchstart', unlockAudio);
+
     // UI callbacks
     UI.initUI(uiContainer, hudContainer, {
         startLevel,
@@ -50,6 +60,8 @@ function init() {
         undo: handleUndo,
         reset: handleReset,
         stopGame,
+        setMusicEnabled: Audio.setMusicEnabled,
+        setSfxEnabled: Audio.setSfxEnabled,
     });
 
     // Show title
@@ -128,6 +140,7 @@ function handleVertexClick(vertexIdx) {
 
     if (result.success) {
         pulseVertex(vertexIdx);
+        Audio.playEdgeDraw(puzzle.moveCount, currentLevel.vertexCount);
 
         if (result.complete) {
             handleWin();
@@ -142,6 +155,7 @@ function handleVertexClick(vertexIdx) {
         if (result.invalidReason === 'no_edge' || result.invalidReason === 'edge_used' ||
             result.invalidReason === 'node_visited' || result.invalidReason === 'wrong_color') {
             screenShake(3, 150);
+            Audio.playInvalidMove();
         }
     }
 }
@@ -149,6 +163,7 @@ function handleVertexClick(vertexIdx) {
 function handleWin() {
     // Celebration effects
     spawnWinParticles(currentLevel.vertices, currentLevel.graph.edges);
+    Audio.playWin();
 
     // Delay win screen slightly so player sees the completed shape
     setTimeout(() => {
@@ -159,12 +174,14 @@ function handleWin() {
 function handleUndo() {
     if (!puzzle || !isPlaying) return;
     puzzle.undo();
+    Audio.playUndo();
     UI.hideStuckNotice();
 }
 
 function handleReset() {
     if (!puzzle || !isPlaying) return;
     puzzle.reset();
+    Audio.playReset();
     clearEffects();
     UI.hideStuckNotice();
 }
@@ -176,6 +193,7 @@ function handleHint() {
         return;
     }
     puzzle.showHint();
+    Audio.playHint();
     UI.updateHUD(puzzle);
 }
 
