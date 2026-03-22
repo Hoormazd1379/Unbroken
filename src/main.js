@@ -117,6 +117,10 @@ function startLevel(levelNumber) {
     UI.showHUD(currentLevel, puzzle);
     Save.setCurrentLevel(levelNumber);
 
+    // Set flowing mood for gameplay
+    Audio.setMood('flowing');
+    Audio.setProgress(0);
+
     // Show canvas
     canvas.classList.add('visible');
 }
@@ -127,6 +131,7 @@ function stopGame() {
     currentLevel = null;
     canvas.classList.remove('visible');
     clearEffects();
+    Audio.setMood('ambient');
 }
 
 // ── Player Actions ──
@@ -141,6 +146,10 @@ function handleVertexClick(vertexIdx) {
     if (result.success) {
         pulseVertex(vertexIdx);
         Audio.playEdgeDraw(puzzle.moveCount, currentLevel.vertexCount);
+        Audio.setProgress(puzzle.moveCount / currentLevel.vertexCount);
+
+        // Recover from tense mood on successful move
+        if (Audio.getMood() === 'tense') Audio.setMood('flowing');
 
         if (result.complete) {
             handleWin();
@@ -148,6 +157,7 @@ function handleVertexClick(vertexIdx) {
             // Check if stuck
             if (!puzzle.isSolvable()) {
                 UI.showStuckNotice();
+                Audio.setMood('tense');
             }
         }
     } else {
@@ -163,6 +173,7 @@ function handleVertexClick(vertexIdx) {
 function handleWin() {
     // Celebration effects
     spawnWinParticles(currentLevel.vertices, currentLevel.graph.edges);
+    Audio.setMood('triumph');
     Audio.playWin();
 
     // Delay win screen slightly so player sees the completed shape
