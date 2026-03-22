@@ -1,77 +1,101 @@
 // ═══════════════════════════════════════════════════════════
-// Unbroken — Adaptive Audio Engine
+// Unbroken — Adaptive Audio Engine v2
 // ═══════════════════════════════════════════════════════════
 //
-// Dynamically evolving generative music that responds to gameplay.
-// - 4 moods (ambient, flowing, tense, triumph) with chord progressions
-// - 5 vertical layers fade in/out with player progress
-// - All SFX harmonically locked to the current chord
-// - Master lowpass filter + compressor for polish
+// Persistent, beat-synchronized generative music.
+//   • Energy (0–1) + Valence (−1 to +1) drive the music
+//   • Multi-chord progressions cycle at bar boundaries
+//   • Progression swaps happen at phrase boundaries (4 bars)
+//   • 7 vertical layers fade smoothly with energy
+//   • All transitions quantized to the beat clock
+//   • Music is continuous across level switches
 // ═══════════════════════════════════════════════════════════
 
 import * as Save from './save.js';
 
+// ── Audio Context & Signal Chain ──
 let ctx = null;
-let masterGain = null;     // master volume
-let musicGain = null;      // music sub-bus
-let sfxGain = null;        // sfx sub-bus
-let masterFilter = null;   // lowpass filter for mood
-let compressor = null;     // dynamics compressor
+let masterGain = null;
+let musicGain = null;
+let sfxGain = null;
+let masterFilter = null;
+let compressor = null;
 
-let currentMood = 'ambient';
-let currentChordIdx = 0;
-let progress = 0;          // 0–1 level completion ratio
-let arpStep = 0;
-let arpTimer = null;
-let pulseTimer = null;
-let bellTimer = null;
-let chordChangeTimer = null;
+// ── State ──
+let energy = 0.25;       // 0 = calm, 1 = intense
+let valence = 0.3;       // −1 = dark/minor, +1 = bright/major
+let running = false;
 
-// Active audio nodes for cleanup
-let padNodes = [];
-let bassNode = null;
+// Beat clock
+let bpm = 68;
+let targetBpm = 68;
+let beat = 0;            // current beat within phrase (0–15)
+let beatTimer = null;
 
-// ── Musical Data ──
+// Chord progression
+let currentProg = null;  // array of chord objects
+let progIdx = 0;         // which chord in progression
+let pendingProg = null;  // queued progression swap (applied at phrase boundary)
 
-// Note frequencies (A4 = 440)
-const NOTE = {
-    C2: 65.41, D2: 73.42, E2: 82.41, F2: 87.31, G2: 98.00, A2: 110.0, B2: 123.47,
-    C3: 130.81, D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.0, B3: 246.94,
-    C4: 261.63, D4: 293.66, E4: 329.63, F4: 349.23, G4: 392.00, A4: 440.0, B4: 493.88,
-    C5: 523.25, D5: 587.33, E5: 659.25, F5: 698.46, G5: 783.99, A5: 880.0, B5: 987.77,
-    C6: 1046.5,
-    // Flats for dissonance
-    Db4: 277.18, Gb4: 369.99, Bb3: 233.08, Eb4: 311.13,
+// Active sound nodes
+let padVoices = [];      // [{osc, gain, lfo, lfoGain}]
+let bassVoice = null;    // {osc, gain}
+let subVoice = null;     // {osc, gain}
+let stringVoices = [];   // [{osc, gain, vibLfo, vibGain}]
+
+// ── Note Frequencies ──
+const N = {
+    C2:65.41,  D2:73.42,  E2:82.41,  F2:87.31,  G2:98,     A2:110,    B2:123.47,
+    C3:130.81, D3:146.83, E3:164.81, F3:174.61, G3:196,    A3:220,    Bb3:233.08, B3:246.94,
+    C4:261.63, Db4:277.18,D4:293.66, Eb4:311.13,E4:329.63, F4:349.23, Gb4:369.99,
+    G4:392,    Ab4:415.3, A4:440,    Bb4:466.16,B4:493.88,
+    C5:523.25, D5:587.33, E5:659.25, F5:698.46, G5:783.99, A5:880,    B5:987.77,
+    C6:1046.5, D6:1174.66,E6:1318.5,
 };
 
-// Chord definitions: [root, notes for pad, arp pattern, bass note]
-const CHORDS = {
-    // Major / bright
-    Cmaj7:  { pad: [NOTE.C4, NOTE.E4, NOTE.G4, NOTE.B4], bass: NOTE.C2, arp: [NOTE.C4, NOTE.E4, NOTE.G4, NOTE.B4, NOTE.C5, NOTE.E5], dissonant: [NOTE.Db4, NOTE.Gb4] },
-    Fmaj7:  { pad: [NOTE.F3, NOTE.A3, NOTE.C4, NOTE.E4], bass: NOTE.F2, arp: [NOTE.F3, NOTE.A3, NOTE.C4, NOTE.E4, NOTE.F4, NOTE.A4], dissonant: [NOTE.Gb4, NOTE.Db4] },
-    G7:     { pad: [NOTE.G3, NOTE.B3, NOTE.D4, NOTE.F4], bass: NOTE.G2, arp: [NOTE.G3, NOTE.B3, NOTE.D4, NOTE.F4, NOTE.G4, NOTE.B4], dissonant: [NOTE.Db4, NOTE.Eb4] },
-    Dm7:    { pad: [NOTE.D3, NOTE.F3, NOTE.A3, NOTE.C4], bass: NOTE.D2, arp: [NOTE.D3, NOTE.F3, NOTE.A3, NOTE.C4, NOTE.D4, NOTE.F4], dissonant: [NOTE.Db4, NOTE.Eb4] },
-    // Minor / tense
-    Am7:    { pad: [NOTE.A3, NOTE.C4, NOTE.E4, NOTE.G4], bass: NOTE.A2, arp: [NOTE.A3, NOTE.C4, NOTE.E4, NOTE.G4, NOTE.A4, NOTE.C5], dissonant: [NOTE.Bb3, NOTE.Db4] },
-    Em7:    { pad: [NOTE.E3, NOTE.G3, NOTE.B3, NOTE.D4], bass: NOTE.E2, arp: [NOTE.E3, NOTE.G3, NOTE.B3, NOTE.D4, NOTE.E4, NOTE.G4], dissonant: [NOTE.Eb4, NOTE.Bb3] },
-    Dm9:    { pad: [NOTE.D3, NOTE.F3, NOTE.A3, NOTE.E4], bass: NOTE.D2, arp: [NOTE.D3, NOTE.F3, NOTE.A3, NOTE.C4, NOTE.E4, NOTE.F4], dissonant: [NOTE.Db4, NOTE.Eb4] },
+// ── Chord Definitions ──
+function chord(bass, pad, arp, dis) { return { bass, pad, arp, dis }; }
+
+const C = {
+    Cmaj7:  chord(N.C2, [N.C4,N.E4,N.G4,N.B4],       [N.C4,N.E4,N.G4,N.B4,N.C5,N.E5,N.G5], [N.Db4,N.Gb4]),
+    Cmaj:   chord(N.C2, [N.C4,N.E4,N.G4],             [N.C4,N.E4,N.G4,N.C5,N.E5,N.G5],      [N.Db4,N.Gb4]),
+    Dm7:    chord(N.D2, [N.D4,N.F4,N.A4,N.C5],        [N.D4,N.F4,N.A4,N.C5,N.D5,N.F5],      [N.Db4,N.Eb4]),
+    Em7:    chord(N.E2, [N.E4,N.G4,N.B4,N.D5],        [N.E4,N.G4,N.B4,N.D5,N.E5,N.G5],      [N.Eb4,N.Bb4]),
+    Fmaj7:  chord(N.F2, [N.F3,N.A3,N.C4,N.E4],        [N.F3,N.A3,N.C4,N.E4,N.F4,N.A4],      [N.Gb4,N.Db4]),
+    Fmaj:   chord(N.F2, [N.F3,N.A3,N.C4],             [N.F3,N.A3,N.C4,N.F4,N.A4,N.C5],      [N.Gb4,N.Db4]),
+    G7:     chord(N.G2, [N.G3,N.B3,N.D4,N.F4],        [N.G3,N.B3,N.D4,N.F4,N.G4,N.B4],      [N.Db4,N.Ab4]),
+    Am7:    chord(N.A2, [N.A3,N.C4,N.E4,N.G4],        [N.A3,N.C4,N.E4,N.G4,N.A4,N.C5],      [N.Bb3,N.Eb4]),
+    Am:     chord(N.A2, [N.A3,N.C4,N.E4],             [N.A3,N.C4,N.E4,N.A4,N.C5,N.E5],      [N.Bb3,N.Eb4]),
+    Bdim:   chord(N.B2, [N.B3,N.D4,N.F4],             [N.B3,N.D4,N.F4,N.B4,N.D5,N.F5],      [N.Db4,N.Ab4]),
+    Dm9:    chord(N.D2, [N.D3,N.F3,N.A3,N.E4],        [N.D3,N.F3,N.A3,N.C4,N.E4,N.F4],      [N.Db4,N.Eb4]),
+    Gsus4:  chord(N.G2, [N.G3,N.C4,N.D4],             [N.G3,N.C4,N.D4,N.G4,N.C5,N.D5],      [N.Db4,N.Ab4]),
+    Emin9:  chord(N.E2, [N.E3,N.G3,N.B3,N.D4],        [N.E3,N.G3,N.B3,N.D4,N.E4,N.G4],      [N.Eb4,N.Bb4]),
+    Bbmaj:  chord(N.B2, [N.Bb3,N.D4,N.F4],            [N.Bb3,N.D4,N.F4,N.Bb4,N.D5,N.F5],    [N.Db4,N.Ab4]),
 };
 
-// Mood → chord progression cycle
-const MOOD_CHORDS = {
-    ambient: ['Cmaj7', 'Fmaj7'],
-    flowing: ['Cmaj7', 'Fmaj7', 'G7', 'Dm7'],
-    tense:   ['Am7', 'Em7', 'Dm9'],
-    triumph: ['Fmaj7', 'G7', 'Cmaj7'],
-};
+// ── Chord Progressions (grouped by valence character) ──
+// Positive valence → major progressions
+const MAJOR_PROGS = [
+    [C.Cmaj7, C.Fmaj7, C.G7,   C.Cmaj7],     // I – IV – V – I
+    [C.Cmaj7, C.Am7,   C.Fmaj7,C.G7   ],     // I – vi – IV – V
+    [C.Fmaj7, C.G7,    C.Em7,  C.Am7  ],     // IV – V – iii – vi
+    [C.Cmaj,  C.Fmaj,  C.Dm7,  C.G7   ],     // I – IV – ii – V
+    [C.Fmaj7, C.Cmaj7, C.Dm7,  C.Cmaj7],     // IV – I – ii – I
+];
 
-// Mood → parameters
-const MOOD_PARAMS = {
-    ambient: { tempo: 60,  filterFreq: 800,  padVol: 0.06, bassVol: 0.03, arpVol: 0, bellVol: 0, pulseVol: 0 },
-    flowing: { tempo: 72,  filterFreq: 2500, padVol: 0.07, bassVol: 0.04, arpVol: 0.04, bellVol: 0.02, pulseVol: 0.015 },
-    tense:   { tempo: 54,  filterFreq: 600,  padVol: 0.05, bassVol: 0.04, arpVol: 0.02, bellVol: 0, pulseVol: 0 },
-    triumph: { tempo: 96,  filterFreq: 4000, padVol: 0.08, bassVol: 0.05, arpVol: 0.06, bellVol: 0.04, pulseVol: 0.025 },
-};
+// Negative valence → minor progressions
+const MINOR_PROGS = [
+    [C.Am7,   C.Dm7,   C.Em7,  C.Am7  ],     // i – iv – v – i
+    [C.Am7,   C.Fmaj7, C.Dm9,  C.Em7  ],     // i – VI – iv9 – v
+    [C.Em7,   C.Am7,   C.Dm7,  C.G7   ],     // v – i – iv – VII
+    [C.Am,    C.Emin9, C.Fmaj, C.Gsus4],     // i – v9 – VI – VIIsus
+];
+
+// Triumph progressions (resolving, bright)
+const TRIUMPH_PROGS = [
+    [C.Fmaj7, C.G7,    C.Am7,  C.Cmaj7],     // IV – V – vi – I
+    [C.Dm7,   C.G7,    C.Cmaj7,C.Cmaj7],     // ii – V – I – I
+];
 
 // ── Initialization ──
 
@@ -80,16 +104,17 @@ function ensureCtx() {
     try {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // Master chain: compressor → filter → gain → destination
         compressor = ctx.createDynamicsCompressor();
-        compressor.threshold.value = -24;
-        compressor.knee.value = 12;
-        compressor.ratio.value = 4;
+        compressor.threshold.value = -20;
+        compressor.knee.value = 10;
+        compressor.ratio.value = 6;
+        compressor.attack.value = 0.003;
+        compressor.release.value = 0.15;
 
         masterFilter = ctx.createBiquadFilter();
         masterFilter.type = 'lowpass';
-        masterFilter.frequency.value = 800;
-        masterFilter.Q.value = 0.7;
+        masterFilter.frequency.value = 900;
+        masterFilter.Q.value = 0.5;
 
         masterGain = ctx.createGain();
         masterGain.gain.value = 1.0;
@@ -105,33 +130,26 @@ function ensureCtx() {
 
         syncSettings();
         return true;
-    } catch {
-        return false;
-    }
+    } catch { return false; }
 }
 
 export function unlock() {
     if (!ensureCtx()) return;
     if (ctx.state === 'suspended') ctx.resume();
-    const settings = Save.getSettings();
-    if (settings.musicEnabled && padNodes.length === 0) {
-        startMusic();
-    }
+    if (!running && Save.getSettings().musicEnabled) startEngine();
 }
 
 // ── Settings ──
 
 export function syncSettings() {
-    const settings = Save.getSettings();
+    const s = Save.getSettings();
     if (musicGain) {
-        const target = settings.musicEnabled ? 1.0 : 0;
-        musicGain.gain.setTargetAtTime(target, ctx.currentTime, 0.3);
-        if (settings.musicEnabled && ctx && padNodes.length === 0) startMusic();
-        if (!settings.musicEnabled) stopMusic();
+        const target = s.musicEnabled ? 1.0 : 0;
+        if (ctx) musicGain.gain.setTargetAtTime(target, ctx.currentTime, 0.3);
+        if (s.musicEnabled && ctx && !running) startEngine();
+        if (!s.musicEnabled && running) stopEngine();
     }
-    if (sfxGain) {
-        sfxGain.gain.value = settings.sfxEnabled ? 0.5 : 0;
-    }
+    if (sfxGain) sfxGain.gain.value = s.sfxEnabled ? 0.45 : 0;
 }
 
 export function setMusicEnabled(on) {
@@ -144,107 +162,213 @@ export function setSfxEnabled(on) {
     syncSettings();
 }
 
-// ── Mood Management ──
+// ── Energy / Valence API (called from main.js) ──
 
-export function setMood(mood) {
-    if (!ctx || mood === currentMood) return;
-    const prevMood = currentMood;
-    currentMood = mood;
-    currentChordIdx = 0;
-    arpStep = 0;
-
-    // Smooth parameter transition
-    const params = MOOD_PARAMS[mood];
-    const now = ctx.currentTime;
-    const fade = 1.5;
-
-    masterFilter.frequency.setTargetAtTime(params.filterFreq, now, fade * 0.4);
-
-    // Rebuild pad + bass on new chord
-    transitionChord(0, fade);
-
-    // Restart rhythmic layers with new tempo
-    restartArpeggiator(params);
-    restartPulse(params);
-    restartBell(params);
-    restartChordCycle(params);
+/** Nudge energy by a delta. Clamped to [0,1]. */
+export function nudgeEnergy(delta) {
+    energy = Math.max(0, Math.min(1, energy + delta));
 }
 
-export function getMood() {
-    return currentMood;
+/** Nudge valence by a delta. Clamped to [-1,1]. */
+export function nudgeValence(delta) {
+    valence = Math.max(-1, Math.min(1, valence + delta));
 }
 
+/** Set progress ratio for current level (0–1). Raises energy. */
 export function setProgress(ratio) {
+    const p = Math.max(0, Math.min(1, ratio));
+    // Energy tracks progress but doesn't purely equal it
+    const target = 0.2 + p * 0.5; // maps 0–1 to 0.2–0.7
+    energy = energy * 0.7 + target * 0.3; // smooth blend
+}
+
+/** Burst of triumph energy (decays naturally). */
+export function triumphBurst() {
+    energy = Math.min(1, energy + 0.35);
+    valence = Math.min(1, valence + 0.4);
+}
+
+/** Get current state for external checks */
+export function getEnergy() { return energy; }
+export function getValence() { return valence; }
+
+// Keep backward compat for main.js getMood
+export function getMood() {
+    if (energy > 0.8 && valence > 0.3) return 'triumph';
+    if (valence < -0.2) return 'tense';
+    if (energy > 0.4) return 'flowing';
+    return 'ambient';
+}
+
+// ── Beat Clock ──
+
+function startBeatClock() {
+    if (beatTimer) return;
+    scheduleBeat();
+}
+
+function scheduleBeat() {
+    const intervalMs = (60 / bpm) * 1000;
+    beatTimer = setTimeout(() => {
+        onBeat();
+        if (running) scheduleBeat();
+    }, intervalMs);
+}
+
+function onBeat() {
+    if (!ctx || !running) return;
+
+    // Smoothly approach target BPM
+    bpm += (targetBpm - bpm) * 0.08;
+
+    // Decay energy & valence slowly toward baseline
+    energy *= 0.997;
+    valence *= 0.998;
+    if (energy < 0.15) energy = 0.15; // never fully silent
+
+    const beatInBar = beat % 4;
+    const barInPhrase = Math.floor(beat / 4) % 4;
+
+    // ── Bar boundary (every 4 beats): change chord ──
+    if (beatInBar === 0 && currentProg) {
+        progIdx = (progIdx + 1) % currentProg.length;
+        crossfadeToChord(currentProg[progIdx]);
+    }
+
+    // ── Phrase boundary (every 16 beats): maybe swap progression ──
+    if (beat % 16 === 0) {
+        updateProgression();
+        updateTargetBpm();
+    }
+
+    // ── Every beat: update layer volumes & filter ──
+    updateLayers();
+
+    // ── Play rhythmic layers ──
+    playArpBeat(beatInBar);
+    if (beatInBar === 0 || beatInBar === 2) playPulseBeat();
+    if (beat % 8 === 0) playBellNote();
+    if (beat % 6 === 0 && energy > 0.5) playShimmer();
+
+    beat++;
+}
+
+// ── Progression Selection ──
+
+function pickProgression() {
+    if (energy > 0.8 && valence > 0.3) {
+        return TRIUMPH_PROGS[Math.floor(Math.random() * TRIUMPH_PROGS.length)];
+    }
+    if (valence >= 0) {
+        return MAJOR_PROGS[Math.floor(Math.random() * MAJOR_PROGS.length)];
+    }
+    return MINOR_PROGS[Math.floor(Math.random() * MINOR_PROGS.length)];
+}
+
+function updateProgression() {
+    const newProg = pickProgression();
+    // Only swap if it's actually different
+    if (newProg !== currentProg) {
+        currentProg = newProg;
+        progIdx = 0;
+        crossfadeToChord(currentProg[0]);
+    }
+}
+
+function updateTargetBpm() {
+    // BPM scales with energy: 60–96
+    targetBpm = 60 + energy * 36;
+}
+
+// ── Layer Volume Control ──
+
+function updateLayers() {
     if (!ctx) return;
-    progress = Math.max(0, Math.min(1, ratio));
-
-    // Dynamic filter opening — more progress = brighter
-    if (currentMood === 'flowing') {
-        const base = MOOD_PARAMS.flowing.filterFreq;
-        const target = base + progress * 2000; // up to 4500Hz
-        masterFilter.frequency.setTargetAtTime(target, ctx.currentTime, 0.5);
-    }
-
-    // Dynamic tempo — speed up slightly with progress
-    if (currentMood === 'flowing') {
-        // Will affect next arp/pulse tick naturally
-    }
-}
-
-// ── Chord Transitions ──
-
-function getChord() {
-    const progression = MOOD_CHORDS[currentMood] || MOOD_CHORDS.ambient;
-    const name = progression[currentChordIdx % progression.length];
-    return CHORDS[name];
-}
-
-function transitionChord(newIdx, fadeTime = 1.5) {
-    currentChordIdx = newIdx;
-    const chord = getChord();
     const now = ctx.currentTime;
+    const f = 0.4; // smoothing time constant
 
-    // Fade out old pad
-    padNodes.forEach(n => {
-        try {
-            n.gain.gain.setTargetAtTime(0.001, now, fadeTime * 0.3);
-            setTimeout(() => {
-                try { n.osc.stop(); n.osc.disconnect(); n.gain.disconnect(); if (n.lfo) { n.lfo.stop(); n.lfo.disconnect(); } } catch {}
-            }, fadeTime * 1000 + 500);
-        } catch {}
+    // Filter frequency: 600 (calm) → 4500 (intense)
+    const filterF = 600 + energy * 3900 + Math.max(0, valence) * 800;
+    masterFilter.frequency.setTargetAtTime(filterF, now, f);
+
+    // Pad: always on, volume 0.02–0.07
+    const padVol = 0.02 + energy * 0.05;
+    padVoices.forEach(v => {
+        if (v.gain) v.gain.gain.setTargetAtTime(padVol, now, f);
     });
-    padNodes = [];
 
-    // Fade out old bass
-    if (bassNode) {
-        try {
-            bassNode.gain.gain.setTargetAtTime(0.001, now, fadeTime * 0.3);
-            setTimeout(() => {
-                try { bassNode.osc.stop(); bassNode.osc.disconnect(); bassNode.gain.disconnect(); } catch {}
-            }, fadeTime * 1000 + 500);
-        } catch {}
-        bassNode = null;
+    // Bass: on at energy > 0.1
+    if (bassVoice) {
+        const bv = energy > 0.1 ? 0.02 + energy * 0.04 : 0;
+        bassVoice.gain.gain.setTargetAtTime(bv, now, f);
     }
 
-    // Build new pad
-    const params = MOOD_PARAMS[currentMood];
-    buildPad(chord, params, fadeTime);
-    buildBass(chord, params, fadeTime);
+    // Sub-bass: on at energy > 0.3
+    if (subVoice) {
+        const sv = energy > 0.3 ? (energy - 0.3) * 0.04 : 0;
+        subVoice.gain.gain.setTargetAtTime(sv, now, f);
+    }
+
+    // Strings: on at energy > 0.35
+    const strVol = energy > 0.35 ? (energy - 0.35) * 0.05 : 0;
+    stringVoices.forEach(v => {
+        if (v.gain) v.gain.gain.setTargetAtTime(strVol, now, f);
+    });
 }
 
-function advanceChord() {
-    const progression = MOOD_CHORDS[currentMood] || MOOD_CHORDS.ambient;
-    const nextIdx = (currentChordIdx + 1) % progression.length;
-    transitionChord(nextIdx, 2.0);
-    arpStep = 0;
-}
+// ── Chord Crossfade ──
 
-// ── Layer: Pad (sustained chord) ──
-
-function buildPad(chord, params, fadeIn = 1.5) {
+function crossfadeToChord(chord) {
+    if (!ctx) return;
     const now = ctx.currentTime;
-    const targetVol = params.padVol;
+    const fade = (60 / bpm) * 0.8; // less than one beat for smooth overlap
 
+    // ── Fade out old pad ──
+    padVoices.forEach(v => {
+        v.gain.gain.setTargetAtTime(0.001, now, fade * 0.5);
+        const cleanup = () => {
+            try { v.osc.stop(); v.osc.disconnect(); v.gain.disconnect(); } catch {}
+            try { if (v.lfo) { v.lfo.stop(); v.lfo.disconnect(); v.lfoGain.disconnect(); } } catch {}
+        };
+        setTimeout(cleanup, fade * 3000);
+    });
+    padVoices = [];
+
+    // ── Fade out old bass ──
+    if (bassVoice) {
+        bassVoice.gain.gain.setTargetAtTime(0.001, now, fade * 0.5);
+        const old = bassVoice;
+        setTimeout(() => { try { old.osc.stop(); old.osc.disconnect(); old.gain.disconnect(); } catch {} }, fade * 3000);
+        bassVoice = null;
+    }
+    // ── Fade out old sub ──
+    if (subVoice) {
+        subVoice.gain.gain.setTargetAtTime(0.001, now, fade * 0.5);
+        const old = subVoice;
+        setTimeout(() => { try { old.osc.stop(); old.osc.disconnect(); old.gain.disconnect(); } catch {} }, fade * 3000);
+        subVoice = null;
+    }
+    // ── Fade out old strings ──
+    stringVoices.forEach(v => {
+        v.gain.gain.setTargetAtTime(0.001, now, fade * 0.5);
+        setTimeout(() => {
+            try { v.osc.stop(); v.osc.disconnect(); v.gain.disconnect(); } catch {}
+            try { if (v.vibLfo) { v.vibLfo.stop(); v.vibLfo.disconnect(); v.vibGain.disconnect(); } } catch {}
+        }, fade * 3000);
+    });
+    stringVoices = [];
+
+    // ── Build new voices ──
+    buildPad(chord, fade);
+    buildBass(chord, fade);
+    buildSub(chord, fade);
+    buildStrings(chord, fade);
+}
+
+// ── Layer: Pad (warm detuned sine chord) ──
+
+function buildPad(chord, fadeIn) {
+    const now = ctx.currentTime;
     chord.pad.forEach((freq, i) => {
         // Main voice
         const osc = ctx.createOscillator();
@@ -252,14 +376,14 @@ function buildPad(chord, params, fadeIn = 1.5) {
         osc.type = 'sine';
         osc.frequency.value = freq;
         gain.gain.setValueAtTime(0.001, now);
-        gain.gain.setTargetAtTime(targetVol, now, fadeIn * 0.4);
+        gain.gain.setTargetAtTime(0.04, now, fadeIn);
 
-        // Subtle detune LFO for warmth
+        // Detune LFO
         const lfo = ctx.createOscillator();
         const lfoGain = ctx.createGain();
         lfo.type = 'sine';
-        lfo.frequency.value = 0.06 + i * 0.025;
-        lfoGain.gain.value = 1.5; // subtle detune in cents via freq
+        lfo.frequency.value = 0.04 + i * 0.02;
+        lfoGain.gain.value = 2;
         lfo.connect(lfoGain);
         lfoGain.connect(osc.detune);
 
@@ -267,343 +391,364 @@ function buildPad(chord, params, fadeIn = 1.5) {
         gain.connect(musicGain);
         lfo.start(now);
         osc.start(now);
+        padVoices.push({ osc, gain, lfo, lfoGain });
 
-        padNodes.push({ osc, gain, lfo });
-
-        // Second detuned voice for richness
+        // Detuned second voice (chorus effect)
         const osc2 = ctx.createOscillator();
         const gain2 = ctx.createGain();
         osc2.type = 'sine';
-        osc2.frequency.value = freq * 1.002; // slight detune
+        osc2.frequency.value = freq * 1.003;
         gain2.gain.setValueAtTime(0.001, now);
-        gain2.gain.setTargetAtTime(targetVol * 0.5, now, fadeIn * 0.4);
+        gain2.gain.setTargetAtTime(0.02, now, fadeIn);
         osc2.connect(gain2);
         gain2.connect(musicGain);
         osc2.start(now);
-
-        padNodes.push({ osc: osc2, gain: gain2 });
+        padVoices.push({ osc: osc2, gain: gain2 });
     });
 }
 
 // ── Layer: Bass ──
 
-function buildBass(chord, params, fadeIn = 1.5) {
+function buildBass(chord, fadeIn) {
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.value = chord.bass;
     gain.gain.setValueAtTime(0.001, now);
-    gain.gain.setTargetAtTime(params.bassVol, now, fadeIn * 0.4);
+    gain.gain.setTargetAtTime(0.03, now, fadeIn);
     osc.connect(gain);
     gain.connect(musicGain);
     osc.start(now);
-    bassNode = { osc, gain };
+    bassVoice = { osc, gain };
 }
 
-// ── Layer: Arpeggiator ──
+// ── Layer: Sub-bass (octave below bass) ──
 
-function restartArpeggiator(params) {
-    if (arpTimer) clearInterval(arpTimer);
-    if (params.arpVol <= 0) return;
-
-    const intervalMs = (60 / params.tempo) * 500; // 8th notes
-    arpTimer = setInterval(() => {
-        if (!ctx || !Save.getSettings().musicEnabled) return;
-
-        // Only play if progress warrants it or mood is triumph
-        const shouldPlay = currentMood === 'triumph' || progress >= 0.15;
-        if (!shouldPlay) return;
-
-        const chord = getChord();
-        const notes = chord.arp;
-        const note = notes[arpStep % notes.length];
-        arpStep++;
-
-        // Dynamic volume based on progress
-        let vol = params.arpVol;
-        if (currentMood === 'flowing') {
-            vol *= Math.min(1, progress * 2.5); // fades in with progress
-        }
-
-        playMusicNote(note, 0.15, 'triangle', vol);
-    }, intervalMs);
-}
-
-// ── Layer: Bell/Pluck (FM synthesis) ──
-
-function restartBell(params) {
-    if (bellTimer) clearInterval(bellTimer);
-    if (params.bellVol <= 0) return;
-
-    const intervalMs = (60 / params.tempo) * 2000; // every 2 beats
-    bellTimer = setInterval(() => {
-        if (!ctx || !Save.getSettings().musicEnabled) return;
-        if (currentMood === 'flowing' && progress < 0.4) return;
-
-        const chord = getChord();
-        const notes = chord.arp;
-        // Pick a high note
-        const note = notes[Math.floor(Math.random() * 2) + 4] || notes[notes.length - 1];
-
-        playBellNote(note, params.bellVol);
-    }, intervalMs);
-}
-
-function playBellNote(freq, vol) {
-    if (!ctx) return;
+function buildSub(chord, fadeIn) {
     const now = ctx.currentTime;
-
-    // Carrier
-    const carrier = ctx.createOscillator();
-    const carrierGain = ctx.createGain();
-    carrier.type = 'sine';
-    carrier.frequency.value = freq;
-
-    // Modulator (FM synthesis)
-    const mod = ctx.createOscillator();
-    const modGain = ctx.createGain();
-    mod.type = 'sine';
-    mod.frequency.value = freq * 2.01; // slight detuned harmonic
-    modGain.gain.value = freq * 0.5;
-    mod.connect(modGain);
-    modGain.connect(carrier.frequency);
-
-    // Envelope
-    carrierGain.gain.setValueAtTime(vol, now);
-    carrierGain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
-
-    carrier.connect(carrierGain);
-    carrierGain.connect(musicGain);
-    mod.start(now);
-    carrier.start(now);
-    carrier.stop(now + 1.5);
-    mod.stop(now + 1.5);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = chord.bass / 2;
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.setTargetAtTime(0.015, now, fadeIn);
+    osc.connect(gain);
+    gain.connect(musicGain);
+    osc.start(now);
+    subVoice = { osc, gain };
 }
 
-// ── Layer: Pulse ──
+// ── Layer: Strings (high register with vibrato) ──
 
-function restartPulse(params) {
-    if (pulseTimer) clearInterval(pulseTimer);
-    if (params.pulseVol <= 0) return;
-
-    const intervalMs = (60 / params.tempo) * 1000; // quarter notes
-    pulseTimer = setInterval(() => {
-        if (!ctx || !Save.getSettings().musicEnabled) return;
-        if (currentMood === 'flowing' && progress < 0.6) return;
-
-        const chord = getChord();
-
-        // Filtered click/pulse on the root
-        const now = ctx.currentTime;
+function buildStrings(chord, fadeIn) {
+    const now = ctx.currentTime;
+    // Use top 2 notes of pad, up an octave
+    const notes = chord.pad.slice(-2).map(f => f * 2);
+    notes.forEach((freq, i) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        const filter = ctx.createBiquadFilter();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.setTargetAtTime(0.015, now, fadeIn);
 
-        osc.type = 'square';
-        osc.frequency.value = chord.bass * 4; // 2 octaves up from bass
-        filter.type = 'lowpass';
-        filter.frequency.value = 400;
-        filter.Q.value = 5;
+        // Vibrato LFO
+        const vibLfo = ctx.createOscillator();
+        const vibGain = ctx.createGain();
+        vibLfo.type = 'sine';
+        vibLfo.frequency.value = 4.5 + i * 0.5; // ~5Hz vibrato
+        vibGain.gain.value = 3; // subtle pitch bend
+        vibLfo.connect(vibGain);
+        vibGain.connect(osc.detune);
 
-        gain.gain.setValueAtTime(params.pulseVol, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-
-        osc.connect(filter);
-        filter.connect(gain);
+        osc.connect(gain);
         gain.connect(musicGain);
+        vibLfo.start(now);
         osc.start(now);
-        osc.stop(now + 0.1);
-    }, intervalMs);
+        stringVoices.push({ osc, gain, vibLfo, vibGain });
+    });
 }
 
-// ── Chord Cycling ──
+// ── Layer: Arpeggiator (plays on each beat) ──
 
-function restartChordCycle(params) {
-    if (chordChangeTimer) clearInterval(chordChangeTimer);
-    // Change chord every 4 bars
-    const barMs = (60 / params.tempo) * 4000;
-    chordChangeTimer = setInterval(() => {
-        if (!ctx || !Save.getSettings().musicEnabled) return;
-        advanceChord();
-    }, barMs);
+let arpIdx = 0;
+
+function playArpBeat(beatInBar) {
+    if (!ctx || energy < 0.2) return;
+    const chord = currentProg ? currentProg[progIdx] : null;
+    if (!chord) return;
+
+    const notes = chord.arp;
+    // Pattern varies: ascending, descending, alternating based on bar
+    const bar = Math.floor(beat / 4) % 4;
+    let idx;
+    if (bar === 0 || bar === 2) {
+        idx = arpIdx % notes.length; // ascending
+    } else if (bar === 1) {
+        idx = (notes.length - 1 - arpIdx % notes.length); // descending
+    } else {
+        idx = (arpIdx * 2) % notes.length; // skip pattern
+    }
+    arpIdx++;
+
+    const freq = notes[idx];
+    const vol = 0.01 + energy * 0.04; // very quiet when low energy
+    playNote(freq, 0.15, 'triangle', vol, musicGain);
 }
 
-// ── Helper: Play a note on the music bus ──
+// ── Layer: Pulse (rhythmic kick on beats 0,2) ──
 
-function playMusicNote(freq, duration, type = 'triangle', volume = 0.04) {
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(volume, now + 0.008);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    osc.connect(gain);
-    gain.connect(musicGain);
-    osc.start(now);
-    osc.stop(now + duration + 0.05);
-}
-
-// ── SFX (harmonically locked to current chord) ──
-
-function playSfxTone(freq, duration, type = 'sine', volume = 0.3, attack = 0.008) {
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = type;
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(volume, now + attack);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-    osc.connect(gain);
-    gain.connect(sfxGain);
-    osc.start(now);
-    osc.stop(now + duration + 0.05);
-}
-
-/** Edge drawn — next chord tone ascending */
-export function playEdgeDraw(moveIndex, totalNodes) {
-    if (!ensureCtx()) return;
-    const chord = getChord();
-    const idx = Math.min(moveIndex, chord.arp.length - 1);
-    const freq = chord.arp[idx];
-    playSfxTone(freq, 0.2, 'sine', 0.25);
-    // Also a soft harmonic above
-    playSfxTone(freq * 2, 0.12, 'sine', 0.08);
-}
-
-/** Invalid move — dissonant note + short filter sweep */
-export function playInvalidMove() {
-    if (!ensureCtx()) return;
-    const chord = getChord();
-    const dis = chord.dissonant[Math.floor(Math.random() * chord.dissonant.length)];
+function playPulseBeat() {
+    if (!ctx || energy < 0.5) return;
+    const chord = currentProg ? currentProg[progIdx] : null;
+    if (!chord) return;
 
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     const filter = ctx.createBiquadFilter();
 
-    osc.type = 'sawtooth';
-    osc.frequency.value = dis;
+    osc.type = 'square';
+    osc.frequency.value = chord.bass * 4;
     filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(1200, now);
-    filter.frequency.exponentialRampToValueAtTime(100, now + 0.2);
-    filter.Q.value = 3;
+    filter.frequency.value = 300 + energy * 400;
+    filter.Q.value = 4;
 
-    gain.gain.setValueAtTime(0.18, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    const vol = (energy - 0.5) * 0.04;
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(sfxGain);
+    gain.connect(musicGain);
     osc.start(now);
-    osc.stop(now + 0.3);
+    osc.stop(now + 0.08);
 }
 
-/** Win — ascending arpeggio through 2 octaves of chord tones */
+// ── Layer: FM Bell (every 8 beats) ──
+
+function playBellNote() {
+    if (!ctx || energy < 0.35) return;
+    const chord = currentProg ? currentProg[progIdx] : null;
+    if (!chord) return;
+
+    const notes = chord.arp;
+    const freq = notes[Math.floor(Math.random() * 2) + notes.length - 3] || notes[notes.length - 1];
+    const now = ctx.currentTime;
+
+    const carrier = ctx.createOscillator();
+    const cGain = ctx.createGain();
+    const mod = ctx.createOscillator();
+    const mGain = ctx.createGain();
+
+    carrier.type = 'sine';
+    carrier.frequency.value = freq;
+    mod.type = 'sine';
+    mod.frequency.value = freq * 2.01;
+    mGain.gain.value = freq * 0.3;
+    mod.connect(mGain);
+    mGain.connect(carrier.frequency);
+
+    const vol = (energy - 0.35) * 0.04;
+    cGain.gain.setValueAtTime(vol, now);
+    cGain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+
+    carrier.connect(cGain);
+    cGain.connect(musicGain);
+    mod.start(now);
+    carrier.start(now);
+    carrier.stop(now + 1.2);
+    mod.stop(now + 1.2);
+}
+
+// ── Layer: Shimmer (high octave sparkle, energy > 0.5) ──
+
+function playShimmer() {
+    if (!ctx) return;
+    const chord = currentProg ? currentProg[progIdx] : null;
+    if (!chord) return;
+
+    const notes = chord.arp;
+    const freq = notes[notes.length - 1] * 2; // very high
+    const now = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const vol = (energy - 0.5) * 0.015;
+    gain.gain.setValueAtTime(vol, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+
+    osc.connect(gain);
+    gain.connect(musicGain);
+    osc.start(now);
+    osc.stop(now + 2.5);
+}
+
+// ── Generic Note Player ──
+
+function playNote(freq, dur, type, vol, dest) {
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(vol, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start(now);
+    osc.stop(now + dur + 0.05);
+}
+
+// ── SFX (harmonically locked to current chord) ──
+
+function getChord() {
+    return currentProg ? currentProg[progIdx] : C.Cmaj7;
+}
+
+function playSfxTone(freq, dur, type, vol) {
+    playNote(freq, dur, type, vol, sfxGain);
+}
+
+/** Edge drawn — ascending chord tone locked to progress */
+export function playEdgeDraw(moveIndex, totalNodes) {
+    if (!ensureCtx()) return;
+    const ch = getChord();
+    const idx = Math.min(moveIndex, ch.arp.length - 1);
+    playSfxTone(ch.arp[idx], 0.2, 'sine', 0.22);
+    playSfxTone(ch.arp[idx] * 2, 0.1, 'sine', 0.06); // harmonic
+}
+
+/** Invalid move — dissonant note */
+export function playInvalidMove() {
+    if (!ensureCtx()) return;
+    const ch = getChord();
+    const dis = ch.dis[Math.floor(Math.random() * ch.dis.length)];
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const filt = ctx.createBiquadFilter();
+
+    osc.type = 'sawtooth';
+    osc.frequency.value = dis;
+    filt.type = 'lowpass';
+    filt.frequency.setValueAtTime(1200, now);
+    filt.frequency.exponentialRampToValueAtTime(100, now + 0.2);
+    filt.Q.value = 3;
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(filt);
+    filt.connect(gain);
+    gain.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + 0.28);
+}
+
+/** Win — ascending arpeggio through 2 octaves */
 export function playWin() {
     if (!ensureCtx()) return;
-    const chord = getChord();
-    const notes = [...chord.arp, ...chord.arp.map(n => n * 2)];
+    const ch = getChord();
+    const notes = [...ch.arp, ...ch.arp.map(f => f * 2)];
     notes.forEach((freq, i) => {
-        const delay = i * 0.08;
-        setTimeout(() => playSfxTone(freq, 0.5, 'sine', 0.2), delay * 1000);
+        setTimeout(() => playSfxTone(freq, 0.45, 'sine', 0.18), i * 70);
     });
 }
 
-/** Undo — descending chord tone */
+/** Undo — descending chord tone glide */
 export function playUndo() {
     if (!ensureCtx()) return;
-    const chord = getChord();
+    const ch = getChord();
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(chord.arp[3] || chord.arp[2], now);
-    osc.frequency.exponentialRampToValueAtTime(chord.arp[0], now + 0.2);
-    gain.gain.setValueAtTime(0.18, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    osc.frequency.setValueAtTime(ch.arp[3] || ch.arp[2], now);
+    osc.frequency.exponentialRampToValueAtTime(ch.arp[0], now + 0.18);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
     osc.connect(gain);
     gain.connect(sfxGain);
     osc.start(now);
-    osc.stop(now + 0.3);
+    osc.stop(now + 0.28);
 }
 
-/** Hint — two highest chord tones as chime */
+/** Hint — two chord tones */
 export function playHint() {
     if (!ensureCtx()) return;
-    const chord = getChord();
-    const len = chord.arp.length;
-    playSfxTone(chord.arp[len - 2], 0.3, 'sine', 0.2);
-    setTimeout(() => playSfxTone(chord.arp[len - 1], 0.25, 'sine', 0.18), 80);
+    const ch = getChord();
+    const l = ch.arp.length;
+    playSfxTone(ch.arp[l - 2], 0.28, 'sine', 0.18);
+    setTimeout(() => playSfxTone(ch.arp[l - 1], 0.22, 'sine', 0.15), 70);
 }
 
-/** Reset — root note descending an octave */
+/** Reset — root descending */
 export function playReset() {
     if (!ensureCtx()) return;
-    const chord = getChord();
+    const ch = getChord();
     const now = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(chord.arp[0] * 2, now);
-    osc.frequency.exponentialRampToValueAtTime(chord.arp[0], now + 0.25);
-    gain.gain.setValueAtTime(0.15, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+    osc.frequency.setValueAtTime(ch.arp[0] * 2, now);
+    osc.frequency.exponentialRampToValueAtTime(ch.arp[0], now + 0.22);
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
     osc.connect(gain);
     gain.connect(sfxGain);
     osc.start(now);
-    osc.stop(now + 0.35);
+    osc.stop(now + 0.33);
 }
 
-// ── Music Start/Stop ──
+// ── Engine Start / Stop ──
 
-function startMusic() {
-    if (!ctx || padNodes.length > 0) return;
-    currentChordIdx = 0;
-    arpStep = 0;
-    progress = 0;
-
-    const params = MOOD_PARAMS[currentMood];
-    const chord = getChord();
-    buildPad(chord, params, 2.0);
-    buildBass(chord, params, 2.0);
-    restartArpeggiator(params);
-    restartBell(params);
-    restartPulse(params);
-    restartChordCycle(params);
+function startEngine() {
+    if (running || !ctx) return;
+    running = true;
+    beat = 0;
+    arpIdx = 0;
+    currentProg = pickProgression();
+    progIdx = 0;
+    crossfadeToChord(currentProg[0]);
+    startBeatClock();
 }
 
-function stopMusic() {
-    // Stop all timers
-    if (arpTimer) { clearInterval(arpTimer); arpTimer = null; }
-    if (pulseTimer) { clearInterval(pulseTimer); pulseTimer = null; }
-    if (bellTimer) { clearInterval(bellTimer); bellTimer = null; }
-    if (chordChangeTimer) { clearInterval(chordChangeTimer); chordChangeTimer = null; }
+function stopEngine() {
+    running = false;
+    if (beatTimer) { clearTimeout(beatTimer); beatTimer = null; }
 
-    // Fade out pad
     const now = ctx ? ctx.currentTime : 0;
-    padNodes.forEach(n => {
-        try {
-            n.gain.gain.setTargetAtTime(0.001, now, 0.3);
+    const cleanup = (voices) => {
+        voices.forEach(v => {
+            try { v.gain.gain.setTargetAtTime(0.001, now, 0.3); } catch {}
             setTimeout(() => {
-                try { n.osc.stop(); n.osc.disconnect(); n.gain.disconnect(); if (n.lfo) { n.lfo.stop(); n.lfo.disconnect(); } } catch {}
-            }, 1000);
-        } catch {}
-    });
-    padNodes = [];
+                try { v.osc.stop(); v.osc.disconnect(); v.gain.disconnect(); } catch {}
+                try { if (v.lfo) { v.lfo.stop(); v.lfo.disconnect(); } } catch {}
+                try { if (v.lfoGain) v.lfoGain.disconnect(); } catch {}
+                try { if (v.vibLfo) { v.vibLfo.stop(); v.vibLfo.disconnect(); } } catch {}
+                try { if (v.vibGain) v.vibGain.disconnect(); } catch {}
+            }, 800);
+        });
+    };
 
-    if (bassNode) {
-        try {
-            bassNode.gain.gain.setTargetAtTime(0.001, now, 0.3);
-            setTimeout(() => {
-                try { bassNode.osc.stop(); bassNode.osc.disconnect(); bassNode.gain.disconnect(); } catch {}
-            }, 1000);
-        } catch {}
-        bassNode = null;
-    }
+    cleanup(padVoices);
+    cleanup(stringVoices);
+    padVoices = [];
+    stringVoices = [];
+
+    [bassVoice, subVoice].forEach(v => {
+        if (!v) return;
+        try { v.gain.gain.setTargetAtTime(0.001, now, 0.3); } catch {}
+        setTimeout(() => { try { v.osc.stop(); v.osc.disconnect(); v.gain.disconnect(); } catch {} }, 800);
+    });
+    bassVoice = null;
+    subVoice = null;
 }
+
+// Backward compat — these are now no-ops, mood is driven by energy/valence
+export function setMood() {}

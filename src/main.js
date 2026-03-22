@@ -117,9 +117,9 @@ function startLevel(levelNumber) {
     UI.showHUD(currentLevel, puzzle);
     Save.setCurrentLevel(levelNumber);
 
-    // Set flowing mood for gameplay
-    Audio.setMood('flowing');
-    Audio.setProgress(0);
+    // Gentle energy lift on level start (music continues from where it was)
+    Audio.nudgeEnergy(0.05);
+    Audio.nudgeValence(0.05);
 
     // Show canvas
     canvas.classList.add('visible');
@@ -131,7 +131,8 @@ function stopGame() {
     currentLevel = null;
     canvas.classList.remove('visible');
     clearEffects();
-    Audio.setMood('ambient');
+    // Music persists — just let energy decay naturally
+    Audio.nudgeEnergy(-0.1);
 }
 
 // ── Player Actions ──
@@ -147,9 +148,7 @@ function handleVertexClick(vertexIdx) {
         pulseVertex(vertexIdx);
         Audio.playEdgeDraw(puzzle.moveCount, currentLevel.vertexCount);
         Audio.setProgress(puzzle.moveCount / currentLevel.vertexCount);
-
-        // Recover from tense mood on successful move
-        if (Audio.getMood() === 'tense') Audio.setMood('flowing');
+        Audio.nudgeValence(0.03);  // each successful move lifts valence
 
         if (result.complete) {
             handleWin();
@@ -157,7 +156,8 @@ function handleVertexClick(vertexIdx) {
             // Check if stuck
             if (!puzzle.isSolvable()) {
                 UI.showStuckNotice();
-                Audio.setMood('tense');
+                Audio.nudgeEnergy(-0.15);
+                Audio.nudgeValence(-0.25);
             }
         }
     } else {
@@ -166,6 +166,7 @@ function handleVertexClick(vertexIdx) {
             result.invalidReason === 'node_visited' || result.invalidReason === 'wrong_color') {
             screenShake(3, 150);
             Audio.playInvalidMove();
+            Audio.nudgeValence(-0.08);
         }
     }
 }
@@ -173,7 +174,7 @@ function handleVertexClick(vertexIdx) {
 function handleWin() {
     // Celebration effects
     spawnWinParticles(currentLevel.vertices, currentLevel.graph.edges);
-    Audio.setMood('triumph');
+    Audio.triumphBurst();
     Audio.playWin();
 
     // Delay win screen slightly so player sees the completed shape
